@@ -1,36 +1,121 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# NexPlaza
 
-## Getting Started
+High-performance product listing and detail experience for Walton Plaza, built with Next.js 16, React 19, TypeScript, Tailwind CSS, and the WaltonPlaza GraphQL API.
 
-First, run the development server:
+## Quick Start
+
+```bash
+npm install
+```
+
+Create a `.env` file (or copy from `.env.example`):
+
+```env
+NEXT_PUBLIC_GRAPHQL_ENDPOINT=https://devapi.waltonplaza.com.bd/graphql
+NEXT_PUBLIC_PRODUCTS_PER_PAGE=12
+```
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) — the home page redirects to `/products`.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Architecture
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Next.js App Router is the only backend layer. Server Components fetch GraphQL data on the server; client components handle interactivity (cart, filters, infinite scroll).
 
-## Learn More
+```
+src/
+├── app/                    # Routes (PLP, PDP, loading/error boundaries)
+├── components/
+│   ├── cart/               # Cart drawer, badge, line items
+│   ├── layout/             # Header, Footer
+│   ├── plp/                # Filters, sort, infinite scroll
+│   ├── product/            # Cards, gallery, variants, pricing
+│   └── ui/                 # Shared primitives
+├── graphql/                # Queries, fragments, typed client
+├── hooks/                  # Cart, filters, infinite scroll
+├── lib/                    # Fetch wrapper, price/image helpers
+├── store/                  # Zustand cart with localStorage persist
+└── types/                  # Strict TypeScript models
+```
 
-To learn more about Next.js, take a look at the following resources:
+### GraphQL Client Choice
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+A lightweight typed `fetch` wrapper (`src/lib/graphql-fetch.ts`) is used instead of Apollo or urql:
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- No extra client bundle weight
+- Native Next.js caching (`revalidate: 60` on PLP, `no-store` on PDP)
+- Full TypeScript inference via manual query strings + response types
+- Single query (`getProducts`) covers both PLP and PDP
 
-## Deploy on Vercel
+### Pagination Strategy
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+**Infinite scroll** over numbered pagination:
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- Better mobile UX — no page targeting
+- Matches e-commerce browsing patterns
+- Initial page is server-rendered via `use()` + Suspense
+- Subsequent pages load client-side via `IntersectionObserver` + direct GraphQL fetch
+
+### State Management
+
+| Concern | Approach |
+|---------|----------|
+| Cart | Zustand + `persist` middleware → `localStorage` (`nexplaza-cart`) |
+| Filters / sort | URL search params via `useSearchParams` (shareable, back-button friendly) |
+| Server data | Server Components + React `use()` under Suspense |
+
+Cart is client-only — no external persistence or checkout (out of scope).
+
+### React 19 Features
+
+| Feature | Where |
+|---------|-------|
+| `use()` | `ProductsPageContent`, `ProductDetailContent` — unwrap GraphQL promises in Server Components |
+| `useOptimistic()` | `useOptimisticCart`, `AddToCartButton`, `CartItem`, `CartBadge` — instant cart feedback |
+
+### Performance
+
+- Server Components for data-fetching routes
+- `React.memo` on `ProductCard`
+- `useMemo` / `useCallback` for filtered lists and handlers
+- `next/image` for all product images
+- Minimal GraphQL field selection (list query omits PDP-only attribute fields)
+- Route-level `loading.tsx` skeletons
+- React Compiler enabled in `next.config.ts`
+
+## API Limitations
+
+The WaltonPlaza `getProducts` API does not expose:
+
+- **Category filter** — no category parameter in `filter`
+- **Rating sort** — no rating field on products
+- **Server-side sort** — no `sort` / `orderBy` argument
+
+Implemented instead:
+
+- **Price filter** and **availability filter** — client-side over loaded products, synced to URL
+- **Price sort** (asc/desc) — client-side over loaded products, synced to URL
+
+Category and rating controls are intentionally omitted rather than mocked.
+
+## Scripts
+
+| Command | Description |
+|---------|-------------|
+| `npm run dev` | Start development server |
+| `npm run build` | Production build |
+| `npm run start` | Start production server |
+| `npm run lint` | Run ESLint |
+
+## Trade-offs
+
+1. **Client-side filtering** — filters only apply to products already loaded via infinite scroll, not the full catalog server-side.
+2. **Direct client GraphQL for pagination** — subsequent PLP pages call the public endpoint from the browser (no proxy Route Handler).
+3. **No checkout** — cart is a local demo; payment and order management are out of scope.
+
+## License
+
+Private — Walton Hi-Tech Industries PLC evaluation project.

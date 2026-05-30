@@ -42,6 +42,11 @@
    - `discount === null` → show `mrpPrice` only, no badge
    - `quantity === 0` → disable CTA, show "Out of Stock"
    - `productAttributes / serviceAndDeliveries / deliveries` null → hide tab
+9. **Use React 19 features efficiently throughout the project.** Apply `use()` and
+   `useOptimistic()` wherever they solve a real problem — not as one-off demos.
+   - `use()` — Server Components that read GraphQL promises under `<Suspense>`
+   - `useOptimistic()` — any user action that should feel instant before async
+     state settles (cart add/update, quantity changes, filter toggles)
 
 ---
 
@@ -243,9 +248,10 @@ One `<InfoTab section={data} />` component renders all of them.
 If the section is `null` or `[].length === 0`, render nothing (hide the tab).
 
 ### AddToCartButton
-- Use React 19 `useOptimistic` for immediate UI feedback
+- **Required:** React 19 `useOptimistic()` for immediate UI feedback
 - Pattern: optimistic state shows "Added ✓" instantly; real cart store confirms async
 - If cart add fails (e.g. stock depleted), revert optimistic state and show toast
+- Share optimistic logic via `useOptimisticCart` — do not duplicate reducers per component
 
 ---
 
@@ -301,7 +307,8 @@ interface CartState {
 | `useCallback`                | Filter change handlers                     |
 | `next/image`                 | All product images                         |
 | GraphQL field selection      | Only request fields used in each query     |
-| `Suspense` + streaming       | PLP grid, PDP sections load progressively  |
+| `Suspense` + `use()`         | PLP/PDP Server Components suspend on fetch   |
+| `useOptimistic()`            | Cart add, qty update, header badge           |
 | `loading.tsx` skeletons      | All route segments                         |
 | Cache: `fetch` revalidate    | `{ next: { revalidate: 60 } }` on PLP     |
 | Cache: no-store on PDP       | `{ cache: 'no-store' }` for variant/stock  |
@@ -310,20 +317,70 @@ interface CartState {
 
 ## React 19 Feature Usage
 
-**Required: use at least one React 19 feature.**
+**Required: use both `use()` and `useOptimistic()` where they fit — not just once.**
 
-### Primary: `useOptimistic` (in `AddToCartButton`)
+React 19 features are a core part of this project, not optional polish. Prefer them
+over older patterns (`useEffect` + manual loading flags, `async` page components
+without Suspense boundaries) when the scenario matches.
+
+### `use()` — Server Components + Suspense
+
+Use `use(promise)` to unwrap typed GraphQL promises inside Server Components so
+`<Suspense>` and `loading.tsx` boundaries handle loading states automatically.
+
+**Apply in:**
+- `app/products/page.tsx` — suspend on the initial PLP fetch
+- `app/products/[uid]/page.tsx` — suspend on the PDP fetch
+- Any Server Component child that receives a pre-started fetch promise as a prop
+
 ```typescript
-const [optimisticCart, addOptimistic] = useOptimistic(
+// lib/graphql-fetch.ts returns a Promise; page passes it down or reads it inline
+import { use } from "react";
+
+function ProductGrid({ productsPromise }: { productsPromise: Promise<Product[]> }) {
+  const products = use(productsPromise);
+  return (/* render grid */);
+}
+```
+
+**Rules:**
+- Start the fetch in the page/layout, pass the promise to child Server Components
+- Wrap promise-consuming components in `<Suspense fallback={<Skeleton />}>`
+- Do not call `use()` in Client Components — it is for Server Components only
+- Do not replace `use()` with `useEffect` + `useState` for server-fetched data
+
+### `useOptimistic()` — instant UI before async state settles
+
+Use `useOptimistic()` for any interaction where the UI should update immediately
+while the real state (Zustand store, URL params, etc.) catches up.
+
+**Apply in:**
+- `AddToCartButton` — show "Added ✓" / updated count instantly on click
+- `CartItem` — optimistic quantity updates while the store persists
+- `CartBadge` — reflect optimistic cart count in the header
+- `useOptimisticCart` hook — centralise the optimistic reducer; reuse in cart UI
+
+```typescript
+const [optimisticItems, addOptimistic] = useOptimistic(
   cartItems,
-  (state, newItem: CartItem) => [...state, newItem]
+  (state, action: CartOptimisticAction) => {
+    if (action.type === "add") return [...state, action.item];
+    if (action.type === "updateQty") {
+      return state.map((item) =>
+        item.variantCode === action.variantCode
+          ? { ...item, qty: action.qty }
+          : item
+      );
+    }
+    return state;
+  }
 );
 ```
-This gives instant cart feedback without waiting for store confirmation.
 
-### Secondary (if scope allows): `use()` hook
-Use `use(promise)` in Server Components to suspend on GraphQL fetch resolution,
-enabling clean Suspense-based streaming without `async/await` boilerplate.
+**Rules:**
+- Always revert or reconcile when the real store rejects the action (e.g. out of stock)
+- Derive displayed cart state from optimistic state, not the store alone
+- Do not use `setTimeout` or fake loading spinners where `useOptimistic()` fits
 
 ### Do NOT use deprecated patterns:
 - No `forwardRef` (use prop drilling or `useImperativeHandle` sparingly)
@@ -409,7 +466,7 @@ Always throw with the API's `message` field — it surfaces in `error.tsx` bound
   - GraphQL client choice justification
   - Pagination strategy justification
   - State management approach
-  - React 19 feature used and why
+  - React 19 features used (`use()`, `useOptimistic()`) and why
   - How to run locally
 - [ ] All 7 sections from evaluation implemented:
   - [x] Section 1: Architecture & Setup
